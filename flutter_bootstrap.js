@@ -47,7 +47,14 @@ _flutter.buildConfig = {"engineRevision":"77e2e94772b6eb43759e34ed1ad7da4674e19c
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations().then(function (registrations) {
     for (var i = 0; i < registrations.length; i++) {
-      registrations[i].unregister();
+      var r = registrations[i];
+      var sw = r.active || r.waiting || r.installing;
+      var url = sw ? sw.scriptURL : '';
+      // On ne retire QUE l'ancien service worker de cache de Flutter, surtout
+      // pas le service worker des notifications push (push-sw.js).
+      if (url.indexOf('flutter_service_worker.js') !== -1) {
+        r.unregister();
+      }
     }
   }).catch(function () {});
 }
