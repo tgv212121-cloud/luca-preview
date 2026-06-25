@@ -9,7 +9,7 @@
 // CanvasKit est servi en LOCAL (build --no-web-resources-cdn), donc cachable et
 // disponible hors-ligne.
 
-const CACHE = 'lucas-shell-v2';
+const CACHE = 'lucas-shell-v3';
 
 const SHELL = [
   './',
@@ -71,11 +71,17 @@ self.addEventListener('fetch', function (event) {
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return;
+  const memeOrigine = url.origin === self.location.origin;
+  // Polices texte que CanvasKit telecharge depuis Google : a cacher aussi,
+  // sinon le texte ne s'affiche pas hors-ligne (les icones, elles, sont locales).
+  const estPoliceTexte = url.hostname === 'fonts.gstatic.com';
+
+  if (!memeOrigine && !estPoliceTexte) return;
   // version.json doit rester frais (detection des mises a jour).
-  if (url.pathname.endsWith('version.json')) return;
+  if (memeOrigine && url.pathname.endsWith('version.json')) return;
 
   const estAsset =
+    estPoliceTexte ||
     url.pathname.indexOf('/canvaskit/') !== -1 ||
     url.pathname.indexOf('/assets/') !== -1;
 
@@ -86,7 +92,7 @@ self.addEventListener('fetch', function (event) {
         const cached = await caches.match(req);
         if (cached) return cached;
         const fresh = await fetch(req);
-        if (fresh && fresh.status === 200) {
+        if (fresh && (fresh.status === 200 || fresh.type === 'opaque')) {
           const cache = await caches.open(CACHE);
           cache.put(req, fresh.clone());
         }
