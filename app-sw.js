@@ -1,20 +1,69 @@
 // Service worker du SHELL de l'app : permet de LANCER Lucas sans reseau.
 //
-// Strategie NETWORK-FIRST sur nos fichiers : en ligne, on prend TOUJOURS la
-// derniere version depuis le reseau (jamais bloque sur une vieille version, le
-// probleme de cache d'avant ne peut donc pas revenir). Hors-ligne, on ressert la
-// copie mise en cache lors de la derniere connexion : l'app se lance quand meme.
+// - PRE-CHARGEMENT a l'installation : on cache tout de suite les fichiers vitaux
+//   pour que le lancement hors-ligne ne depende pas du hasard des fetchs.
+// - NETWORK-FIRST sur le code de l'app : en ligne on prend TOUJOURS la derniere
+//   version (jamais bloque sur une vieille), hors-ligne on sert le cache.
+// - CACHE-FIRST sur CanvasKit et les assets (gros et immuables).
 //
-// CanvasKit (gstatic) change rarement et est gros : cache-first pour lui.
+// CanvasKit est servi en LOCAL (build --no-web-resources-cdn), donc cachable et
+// disponible hors-ligne.
 
-const CACHE = 'lucas-shell-v1';
+const CACHE = 'lucas-shell-v2';
+
+const SHELL = [
+  './',
+  'index.html',
+  'flutter.js',
+  'flutter_bootstrap.js',
+  'main.dart.js',
+  'manifest.json',
+  'favicon.png',
+  'canvaskit/canvaskit.js',
+  'canvaskit/canvaskit.wasm',
+  'assets/AssetManifest.bin.json',
+  'assets/AssetManifest.json',
+  'assets/FontManifest.json',
+  'assets/NOTICES',
+  'assets/fonts/MaterialIcons-Regular.otf',
+  'icons/Icon-192.png',
+];
 
 self.addEventListener('install', function (event) {
-  self.skipWaiting();
+  event.waitUntil(
+    (async function () {
+      try {
+        const cache = await caches.open(CACHE);
+        // add individuel + allSettled : un fichier manquant ne casse pas tout.
+        await Promise.allSettled(
+          SHELL.map(function (u) {
+            return cache.add(u);
+          })
+        );
+      } catch (e) {}
+      self.skipWaiting();
+    })()
+  );
 });
 
 self.addEventListener('activate', function (event) {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    (async function () {
+      try {
+        const keys = await caches.keys();
+        await Promise.all(
+          keys
+            .filter(function (k) {
+              return k.indexOf('lucas-shell') === 0 && k !== CACHE;
+            })
+            .map(function (k) {
+              return caches.delete(k);
+            })
+        );
+      } catch (e) {}
+      await self.clients.claim();
+    })()
+  );
 });
 
 self.addEventListener('fetch', function (event) {
@@ -22,32 +71,32 @@ self.addEventListener('fetch', function (event) {
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
-  const memeOrigine = url.origin === self.location.origin;
-  const estCanvaskit =
-    url.hostname === 'www.gstatic.com' &&
-    url.pathname.indexOf('flutter-canvaskit') !== -1;
-
-  // On ne gere que nos fichiers + CanvasKit ; le reste passe normalement.
-  if (!memeOrigine && !estCanvaskit) return;
+  if (url.origin !== self.location.origin) return;
   // version.json doit rester frais (detection des mises a jour).
-  if (memeOrigine && url.pathname.endsWith('version.json')) return;
+  if (url.pathname.endsWith('version.json')) return;
 
-  if (estCanvaskit) {
-    // Cache-first : on garde CanvasKit une fois pour toutes.
+  const estAsset =
+    url.pathname.indexOf('/canvaskit/') !== -1 ||
+    url.pathname.indexOf('/assets/') !== -1;
+
+  if (estAsset) {
+    // Cache-first : gros fichiers immuables.
     event.respondWith(
       (async function () {
         const cached = await caches.match(req);
         if (cached) return cached;
         const fresh = await fetch(req);
-        const cache = await caches.open(CACHE);
-        cache.put(req, fresh.clone());
+        if (fresh && fresh.status === 200) {
+          const cache = await caches.open(CACHE);
+          cache.put(req, fresh.clone());
+        }
         return fresh;
       })()
     );
     return;
   }
 
-  // Nos fichiers : network-first (toujours frais en ligne, cache en secours).
+  // Code de l'app : network-first (toujours frais en ligne, cache en secours).
   event.respondWith(
     (async function () {
       try {
@@ -62,7 +111,7 @@ self.addEventListener('fetch', function (event) {
         if (cached) return cached;
         if (req.mode === 'navigate') {
           const idx =
-            (await caches.match('index.html')) || (await caches.match('./'));
+            (await caches.match('./')) || (await caches.match('index.html'));
           if (idx) return idx;
         }
         throw e;
